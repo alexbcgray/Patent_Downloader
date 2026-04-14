@@ -7,99 +7,140 @@ import zipfile
 import io
 
 # --- App UI Configuration ---
-st.set_page_config(page_title="Patent Downloader", page_icon="📄")
+st.set_page_config(page_title="Patent Downloader", page_icon="📄", layout="centered")
+
 st.title("Automated Patent Downloader 📄")
-st.write("Drag and drop your Excel file containing a 'Publication number' column. The app will fetch the PDFs and package them into a single Zip file for you.")
 
-# --- Browser Spoofing ---
-HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-}
+# --- Create Tabs ---
+tab1, tab2 = st.tabs(["🚀 Downloader", "📖 How to Use / Instructions"])
 
-# --- File Uploader ---
-uploaded_file = st.file_uploader("Upload your Excel File (.xlsx)", type=["xlsx"])
+# ==========================================
+# TAB 1: THE DOWNLOADER TOOL
+# ==========================================
+with tab1:
+    st.write("Drag and drop your Excel file containing a 'Publication number' column. The app will fetch the PDFs and package them into a single Zip file for you.")
 
-if uploaded_file is not None:
-    # Read the excel file
-    try:
-        df = pd.read_excel(uploaded_file)
-        if 'Publication number' not in df.columns:
-            st.error("Error: The Excel file must contain a column named 'Publication number'.")
+    # --- Browser Spoofing ---
+    HEADERS = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    }
+
+    # --- File Uploader ---
+    uploaded_file = st.file_uploader("Upload your Excel File (.xlsx)", type=["xlsx"])
+
+    if uploaded_file is not None:
+        # Read the excel file
+        try:
+            df = pd.read_excel(uploaded_file)
+            if 'Publication number' not in df.columns:
+                st.error("⚠️ Error: The Excel file must contain a column named exactly 'Publication number'. Please check the Instructions tab.")
+                st.stop()
+                
+            patents_to_fetch = df['Publication number'].dropna().astype(str).tolist()
+            st.success(f"Found {len(patents_to_fetch)} patents to process.")
+            
+        except Exception as e:
+            st.error(f"Could not read the Excel file: {e}")
             st.stop()
-            
-        patents_to_fetch = df['Publication number'].dropna().astype(str).tolist()
-        st.success(f"Found {len(patents_to_fetch)} patents to process.")
-        
-    except Exception as e:
-        st.error(f"Could not read the Excel file: {e}")
-        st.stop()
 
-    # --- Process Button ---
-    if st.button("Fetch Patents"):
-        # UI Elements for progress
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-        log_window = st.empty()
-        
-        # Create an in-memory bytes buffer for our zip file
-        zip_buffer = io.BytesIO()
-        
-        # Open the zip buffer for writing
-        with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED, False) as zip_file:
+        # --- Process Button ---
+        if st.button("Fetch Patents", type="primary"):
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            log_window = st.empty()
             
-            logs = []
-            successful_downloads = 0
+            zip_buffer = io.BytesIO()
             
-            for i, pub_number in enumerate(patents_to_fetch):
-                pub_number = pub_number.strip()
-                status_text.markdown(f"**Currently processing:** `{pub_number}` ({i+1}/{len(patents_to_fetch)})")
+            with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED, False) as zip_file:
+                logs = []
+                successful_downloads = 0
                 
-                patent_page_url = f"https://patents.google.com/patent/{pub_number}/en"
-                
-                try:
-                    # 1. Load Google Patents Page
-                    page_response = requests.get(patent_page_url, headers=HEADERS)
+                for i, pub_number in enumerate(patents_to_fetch):
+                    pub_number = pub_number.strip()
+                    status_text.markdown(f"**Currently processing:** `{pub_number}` ({i+1}/{len(patents_to_fetch)})")
                     
-                    if page_response.status_code == 200:
-                        soup = BeautifulSoup(page_response.text, 'html.parser')
-                        meta_tag = soup.find('meta', attrs={'name': 'citation_pdf_url'})
+                    patent_page_url = f"https://patents.google.com/patent/{pub_number}/en"
+                    
+                    try:
+                        page_response = requests.get(patent_page_url, headers=HEADERS)
                         
-                        if meta_tag and meta_tag.get('content'):
-                            real_pdf_url = meta_tag['content']
+                        if page_response.status_code == 200:
+                            soup = BeautifulSoup(page_response.text, 'html.parser')
+                            meta_tag = soup.find('meta', attrs={'name': 'citation_pdf_url'})
                             
-                            # 2. Download the actual PDF
-                            pdf_response = requests.get(real_pdf_url, headers=HEADERS)
-                            
-                            if pdf_response.status_code == 200:
-                                # Write the PDF bytes directly into the Zip file
-                                zip_file.writestr(f"{pub_number}.pdf", pdf_response.content)
-                                logs.append(f"✅ Success: {pub_number}")
-                                successful_downloads += 1
+                            if meta_tag and meta_tag.get('content'):
+                                real_pdf_url = meta_tag['content']
+                                pdf_response = requests.get(real_pdf_url, headers=HEADERS)
+                                
+                                if pdf_response.status_code == 200:
+                                    zip_file.writestr(f"{pub_number}.pdf", pdf_response.content)
+                                    logs.append(f"✅ Success: {pub_number}")
+                                    successful_downloads += 1
+                                else:
+                                    logs.append(f"❌ Failed to download PDF data: {pub_number}")
                             else:
-                                logs.append(f"❌ Failed to download PDF data: {pub_number}")
+                                logs.append(f"⚠️ No PDF link found on page: {pub_number}")
                         else:
-                            logs.append(f"⚠️ No PDF link found on page: {pub_number}")
-                    else:
-                        logs.append(f"❌ Could not load page: {pub_number}")
-                        
-                except Exception as e:
-                    logs.append(f"⚠️ Error on {pub_number}: {e}")
-                
-                # Update progress bar and logs
-                progress_bar.progress((i + 1) / len(patents_to_fetch))
-                # Keep only the last 5 logs so the UI doesn't get massive
-                log_window.text("\n".join(logs[-5:]))
-                
-                time.sleep(1.5) # Be polite to Google
+                            logs.append(f"❌ Could not load page: {pub_number}")
+                            
+                    except Exception as e:
+                        logs.append(f"⚠️ Error on {pub_number}: {e}")
+                    
+                    progress_bar.progress((i + 1) / len(patents_to_fetch))
+                    log_window.text("\n".join(logs[-5:]))
+                    time.sleep(1.5) 
 
-        # --- Finished Processing ---
-        progress_bar.empty()
-        status_text.success(f"🎉 Complete! Successfully bundled {successful_downloads} out of {len(patents_to_fetch)} patents.")
-        
-        # Provide the download button for the Zip file
-        st.download_button(
-            label="⬇️ Download All Patents (ZIP)",
-            data=zip_buffer.getvalue(),
-            file_name="Downloaded_Patents.zip",
-            mime="application/zip"
-        )
+            progress_bar.empty()
+            status_text.success(f"🎉 Complete! Successfully bundled {successful_downloads} out of {len(patents_to_fetch)} patents.")
+            
+            st.download_button(
+                label="⬇️ Download All Patents (ZIP)",
+                data=zip_buffer.getvalue(),
+                file_name="Downloaded_Patents.zip",
+                mime="application/zip"
+            )
+
+# ==========================================
+# TAB 2: INSTRUCTIONS & TEMPLATE
+# ==========================================
+with tab2:
+    st.header("How to format your Excel file")
+    st.write("For this tool to work, your Excel file must be formatted correctly. Don't worry, it's very simple!")
+    
+    st.markdown("""
+    ### 📝 Checklist:
+    1. Your file must be a standard Excel workbook (`.xlsx`).
+    2. The very first row must be your headers.
+    3. You **must** have a column titled exactly **`Publication number`** (case-sensitive).
+    4. The publication numbers should be standard patent codes (e.g., `US12133558B2`).
+    """)
+
+    st.subheader("Visual Example")
+    st.write("Here is what your Excel sheet should look like:")
+    
+    # Show a visual representation of the required dataframe
+    example_data = {
+        "Publication number": ["US12133558B2", "CA2839099C", "GB2504075A"],
+        "Assignee (Optional)": ["Japan Tobacco Inc.", "British American Tobacco", "Nicoventures"],
+        "Title (Optional)": ["Cartridge...", "Heating...", "Electronic smoking..."]
+    }
+    st.dataframe(pd.DataFrame(example_data), hide_index=True)
+
+    st.markdown("---")
+    
+    # Generate a downloadable template
+    st.subheader("Download a Blank Template")
+    st.write("To make things easy, you can download this pre-formatted blank template, paste your numbers into it, and upload it back to the Downloader tab.")
+    
+    template_df = pd.DataFrame(columns=["Publication number", "Notes (Optional)"])
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        template_df.to_excel(writer, index=False, sheet_name='Patents')
+    processed_data = output.getvalue()
+    
+    st.download_button(
+        label="⬇️ Download Excel Template",
+        data=processed_data,
+        file_name="Patent_Template.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
